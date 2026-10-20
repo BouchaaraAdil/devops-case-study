@@ -1,0 +1,95 @@
+name: Flux Live Diff
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - clusters/**
+      - apps/**
+      - infrastructure/**
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: flux-diff-${{ github.event.number }}
+  cancel-in-progress: true
+
+env:
+  K3D_VERSION: v5.9.0
+  FLUX_VERSION: 2.9.6
+
+jobs:
+  flux-diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate Grafana dashboards
+        run: find infrastructure/configs -path '*/dashboards/*.json' -exec jq empty {} +
+
+      - name: Install Flux CLI
+        uses: fluxcd/flux2/action@b9c17924adb533d3617ec7de97a7b0f4acc07b39 # v2.9.6
+        with:
+          version: ${{ env.FLUX_VERSION }}
+
+      - name: Install k3d
+        run: curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=${{ env.K3D_VERSION }} bash
+
+      - name: Create cluster
+        run: k3d cluster create flux-ci --agents 0 --no-lb --wait --k3s-arg "--disable=servicelb,traefik,metrics-server@server:*"
+
+      # install Flux and sync the base branch, so the diff shows what the PR changes.
+      # no bootstrap: it would push to the repo, and CI only needs to read it
+      - name: Install Flux and sync the base branch
+        run: |
+          flux install
+          flux create source git flux-system \
+            --url=${{ github.server_url }}/${{ github.repository }} \
+            --branch=${{ github.base_ref }}
+          for f in infrastructure apps; do
+            git show "origin/${{ github.base_ref }}:clusters/devops-cs/$f.yaml" | kubectl apply -f -
+          done
+
+      - name: Wait for controllers
+        run: kubectl -n flux-system wait kustomization/infra-controllers --for=condition=Ready --timeout=10m
+
+      - name: Diff changed Kustomizations
+        run: |
+          changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          failed=0
+          echo "### Flux diff against \`${{ github.base_ref }}\`" > diff.md
+          for ks in infra-controllers:infrastructure/controllers infra-configs:infrastructure/configs apps:apps; do
+            name=${ks%%:*}; path=${ks#*:}
+            grep -q "^${path}/" <<< "$changed" || continue
+            rc=0
+            {
+              echo "<details open><summary><b>${name}</b></summary>"
+              echo
+              echo '```diff'
+              flux diff kustomization "$name" --path "./${path}" 2>&1 || rc=$?
+              echo '```'
+              echo "</details>"
+            } >> diff.md
+            # flux diff exits 1 when there are changes, >1 on errors
+            [ "$rc" -le 1 ] || failed=1
+            # configs can use CRDs that come with this PR's controllers, so install
+            # those before the configs diff, the same order Flux applies them in
+            if [ "$name" = infra-controllers ]; then
+              kubectl apply --server-side --force-conflicts -k "$path"
+              kubectl wait helmrelease --all -A --for=condition=Ready --timeout=10m
+            fi
+          done
+          cat diff.md
+          exit "$failed"
+
+      - name: Comment on PR
+        if: always() && hashFiles('diff.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.number }} --body-file diff.md --edit-last --create-if-none
