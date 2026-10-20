@@ -1,0 +1,49 @@
+apiVersion: sloth.slok.dev/v1
+kind: PrometheusServiceLevel
+metadata:
+  name: backend-api
+  namespace: observability
+spec:
+  service: backend-api
+  slos:
+    - name: availability
+      objective: 99.5
+      description: /process answers without a 5xx
+      sli:
+        events:
+          errorQuery: sum(rate(backend_api_requests_total{endpoint="/process",status=~"5.."}[{{.window}}])) or vector(0)
+          totalQuery: sum(rate(backend_api_requests_total{endpoint="/process"}[{{.window}}]))
+      alerting:
+        name: BackendApiAvailabilitySLOBurn
+        labels:
+          team: backend
+        annotations:
+          runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#backendapiavailabilitysloburn"
+        pageAlert:
+          labels:
+            severity: critical
+        ticketAlert:
+          labels:
+            severity: warning
+    - name: latency
+      objective: 99
+      description: /process answers under 100ms
+      sli:
+        events:
+          errorQuery: |
+            sum(rate(backend_api_request_duration_seconds_count{endpoint="/process"}[{{.window}}]))
+            -
+            sum(rate(backend_api_request_duration_seconds_bucket{endpoint="/process",le="0.1"}[{{.window}}]))
+          totalQuery: sum(rate(backend_api_request_duration_seconds_count{endpoint="/process"}[{{.window}}]))
+      alerting:
+        name: BackendApiLatencySLOBurn
+        labels:
+          team: backend
+        annotations:
+          runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#backendapilatencysloburn"
+        pageAlert:
+          labels:
+            severity: critical
+        ticketAlert:
+          labels:
+            severity: warning
