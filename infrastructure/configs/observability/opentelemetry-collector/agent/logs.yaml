@@ -1,0 +1,28 @@
+# logs: OTLP from ml-api/backend-api (with trace context), pod files for everything else
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-agent
+  namespace: observability
+spec:
+  config:
+    receivers:
+      file_log:
+        include:
+          - /var/log/pods/*/*/*.log
+        exclude:
+          # collector logs would feed back into the collectors
+          - /var/log/pods/observability_otel-*/*/*.log
+        include_file_path: true
+        start_at: end
+        storage: file_storage
+        operators:
+          # parses CRI format, sets k8s.namespace.name, k8s.pod.name, k8s.pod.uid, k8s.container.name
+          - type: container
+
+    service:
+      pipelines:
+        logs:
+          receivers: [otlp, file_log]
+          processors: [memory_limiter, k8s_attributes, batch]
+          exporters: [otlp_grpc/gateway]

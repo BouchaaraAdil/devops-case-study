@@ -1,0 +1,40 @@
+# metrics -> Prometheus (app metrics from the agents, span metrics from traces.yaml)
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-gateway
+  namespace: observability
+spec:
+  config:
+    processors:
+      # the operator sets service.namespace, which made job="ml-api/ml-api"
+      resource/prometheus_job:
+        attributes:
+          - key: service.namespace
+            action: delete
+
+      # each gateway replica counts its own share of the spans; without this
+      # label the replicas would write the same series and the counters break
+      transform/gateway_pod:
+        error_mode: ignore
+        metric_statements:
+          - set(datapoint.attributes["collector_pod"], "${env:POD_NAME}")
+
+    exporters:
+      # Prometheus takes OTLP natively, no remote-write needed
+      otlp_http/prometheus:
+        metrics_endpoint: http://kube-prometheus-stack-prometheus.observability.svc:9090/api/v1/otlp/v1/metrics
+        tls:
+          insecure: true
+
+    service:
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, resource/common, resource/prometheus_job, batch]
+          exporters: [otlp_http/prometheus]
+        # span metrics + service graph from traces.yaml
+        metrics/traces:
+          receivers: [span_metrics, service_graph]
+          processors: [memory_limiter, resource/common, resource/prometheus_job, transform/gateway_pod, batch]
+          exporters: [otlp_http/prometheus]

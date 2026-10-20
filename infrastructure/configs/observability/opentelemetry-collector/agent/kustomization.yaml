@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# one file per signal, merged into one CR (the operator needs the full spec.config)
+resources:
+  - base.yaml
+patches:
+  - path: metrics.yaml
+  - path: traces.yaml
+  - path: logs.yaml

@@ -1,0 +1,28 @@
+# logs -> probe filter -> Loki
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-gateway
+  namespace: observability
+spec:
+  config:
+    processors:
+      # successful probe access lines are noise; failing ones (503) are kept
+      filter/probes:
+        error_mode: ignore
+        logs:
+          log_record:
+            - IsMatch(body, "\"GET /(health|ready|metrics) HTTP/[0-9.]+\" 200( |$)")
+
+    exporters:
+      otlp_http/loki:
+        endpoint: http://loki.observability.svc:3100/otlp
+        tls:
+          insecure: true
+
+    service:
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, filter/probes, resource/common, batch]
+          exporters: [otlp_http/loki]
