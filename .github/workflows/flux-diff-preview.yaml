@@ -67,6 +67,10 @@ jobs:
           for ks in infra-controllers:infrastructure/controllers infra-configs:infrastructure/configs apps:apps; do
             name=${ks%%:*}; path=${ks#*:}
             grep -q "^${path}/" <<< "$changed" || continue
+            # the dry-run can't create objects in a namespace that doesn't exist yet,
+            # so create the PR's namespaces first, like Flux does before the rest
+            ns=$(kubectl kustomize "$path" | yq 'select(.kind == "Namespace")')
+            [ -z "$ns" ] || kubectl apply --server-side -f - <<< "$ns"
             rc=0
             {
               echo "<details open><summary><b>${name}</b></summary>"
