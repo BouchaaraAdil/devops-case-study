@@ -1,0 +1,60 @@
+# routes alerts to the team's Slack channel: team label first, then the namespace
+# (platform alerts like ServiceDown only have the namespace), the rest goes to platform.
+# webhook URLs come from the alertmanager-slack Secret, outside Git. without it the operator skips this config
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: slack
+  namespace: observability
+spec:
+  route:
+    receiver: platform-alerts
+    groupBy: [alertname, namespace, service]
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    matchers:
+      - name: alertname
+        matchType: "!~"
+        value: Watchdog|InfoInhibitor
+    routes:
+      - receiver: ml-alerts
+        matchers:
+          - name: team
+            value: ml
+      - receiver: ml-alerts
+        matchers:
+          - name: namespace
+            value: ml-api
+      - receiver: backend-alerts
+        matchers:
+          - name: team
+            value: backend
+      - receiver: backend-alerts
+        matchers:
+          - name: namespace
+            value: backend-api
+  receivers:
+    - name: platform-alerts
+      slackConfigs:
+        - channel: "#platform-alerts"
+          apiURL: {name: alertmanager-slack, key: platform}
+          sendResolved: true
+          title: &title '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+          text: &text |-
+            {{ range .Alerts }}*{{ .Labels.severity }}* {{ .Annotations.summary }}{{ with .Annotations.runbook_url }} <{{ . }}|runbook>{{ end }}
+            {{ end }}
+    - name: ml-alerts
+      slackConfigs:
+        - channel: "#ml-alerts"
+          apiURL: {name: alertmanager-slack, key: ml}
+          sendResolved: true
+          title: *title
+          text: *text
+    - name: backend-alerts
+      slackConfigs:
+        - channel: "#backend-alerts"
+          apiURL: {name: alertmanager-slack, key: backend}
+          sendResolved: true
+          title: *title
+          text: *text

@@ -4,3 +4,4 @@ resources:
   - alerts/platform.yaml
   - alerts/ml-api.yaml
   - alerts/backend-api.yaml
+  - alertmanager/slack.yaml
