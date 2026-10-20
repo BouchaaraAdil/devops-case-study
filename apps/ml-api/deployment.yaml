@@ -12,6 +12,8 @@ spec:
       app: ml-api
   template:
     metadata:
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: observability/python
       labels:
         app: ml-api
     spec:

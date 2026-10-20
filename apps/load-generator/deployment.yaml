@@ -12,6 +12,8 @@ spec:
       app: load-generator
   template:
     metadata:
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: observability/python
       labels:
         app: load-generator
     spec:

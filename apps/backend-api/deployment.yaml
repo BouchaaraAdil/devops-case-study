@@ -12,6 +12,8 @@ spec:
       app: backend-api
   template:
     metadata:
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: observability/python
       labels:
         app: backend-api
     spec:
