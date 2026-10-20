@@ -1,0 +1,57 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ml-api-alerts
+  namespace: observability
+spec:
+  groups:
+    - name: ml-api
+      rules:
+        - alert: MLApiHighErrorRate
+          expr: |
+            sum(rate(ml_api_requests_total{endpoint="/predict", status=~"5.."}[5m]))
+              / sum(rate(ml_api_requests_total{endpoint="/predict"}[5m]))
+              > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            service: ml-api
+            team: ml
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#mlapihigherrorrate"
+            summary: "ML API /predict error rate is {{ $value | humanizePercentage }}"
+
+        - alert: MLApiHighLatency
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(ml_api_request_duration_seconds_bucket{endpoint="/predict"}[5m])))
+              > 1
+          for: 5m
+          labels:
+            severity: warning
+            service: ml-api
+            team: ml
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#mlapihighlatency"
+            summary: "ML API p95 latency is {{ $value | humanizeDuration }} (normal is ~400ms)"
+
+        - alert: MLApiNoPredictions
+          expr: sum(rate(ml_api_predictions_total[10m])) == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: ml-api
+            team: ml
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#mlapinopredictions"
+            summary: "ML API made no predictions in the last 10m"
+
+        - alert: MLApiMemoryGrowing
+          expr: deriv(ml_api_memory_bytes[15m]) > 0 and ml_api_memory_bytes > 50 * 1024 * 1024
+          for: 10m
+          labels:
+            severity: warning
+            service: ml-api
+            team: ml
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#mlapimemorygrowing"
+            summary: "{{ $labels.pod }} memory keeps growing ({{ $value | humanize1024 }}B/s), looks like a leak"

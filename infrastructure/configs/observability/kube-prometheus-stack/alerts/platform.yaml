@@ -1,0 +1,78 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: platform-alerts
+  namespace: observability
+spec:
+  groups:
+    - name: availability
+      rules:
+        - alert: ServiceDown
+          expr: kube_deployment_status_replicas_available{namespace=~"ml-api|backend-api|postgres"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#servicedown"
+            summary: "{{ $labels.deployment }} has no available pods"
+
+        - alert: ServiceDegraded
+          expr: |
+            kube_deployment_status_replicas_available{namespace=~"ml-api|backend-api|postgres"}
+              < kube_deployment_spec_replicas{namespace=~"ml-api|backend-api|postgres"}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#servicedegraded"
+            summary: "{{ $labels.deployment }} running {{ $value }} pods, less than desired"
+
+        - alert: ScrapeTargetDown
+          expr: up{job=~"ml-api|backend-api"} == 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#scrapetargetdown"
+            summary: "Can't scrape {{ $labels.pod }} ({{ $labels.job }})"
+
+        # up comes from the collectors, if they die the series disappears
+        - alert: AppMetricsMissing
+          expr: absent(up{job="ml-api"}) or absent(up{job="backend-api"})
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#appmetricsmissing"
+            summary: "No app metrics reaching Prometheus, check otel-agent and otel-gateway"
+
+        # a backend down or rejecting data; the other signals keep flowing
+        - alert: OtelExportFailing
+          expr: sum by (job, exporter) (rate({__name__=~"otelcol_exporter_send_failed_(metric_points|spans|log_records)(_total)?"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#otelexportfailing"
+            summary: "{{ $labels.job }} failing to export via {{ $labels.exporter }}"
+
+        - alert: PodRestarting
+          expr: increase(kube_pod_container_status_restarts_total{namespace=~"ml-api|backend-api|postgres"}[15m]) > 2
+          labels:
+            severity: warning
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#podrestarting"
+            summary: "{{ $labels.pod }} restarted {{ $value | humanize }} times in 15m"
+            description: "Check last termination reason, usually OOMKilled or failing liveness probe."
+
+        - alert: ContainerMemoryNearLimit
+          expr: |
+            max by (namespace, pod, container) (container_memory_working_set_bytes{namespace=~"ml-api|backend-api|postgres", container!=""})
+              / max by (namespace, pod, container) (kube_pod_container_resource_limits{resource="memory"})
+              > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#containermemorynearlimit"
+            summary: "{{ $labels.pod }} uses {{ $value | humanizePercentage }} of its memory limit, OOMKill incoming"

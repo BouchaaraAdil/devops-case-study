@@ -1,0 +1,73 @@
+# traces -> span metrics + service graph (every span) -> tail sampling -> Tempo
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-gateway
+  namespace: observability
+spec:
+  config:
+    connectors:
+      # RED metrics per service/span, computed before sampling so they stay exact.
+      # sent to Prometheus by the metrics/traces pipeline
+      span_metrics:
+        histogram:
+          unit: s
+        exemplars:
+          enabled: true
+        # the Prometheus OTLP receiver only takes cumulative
+        aggregation_temporality: AGGREGATION_TEMPORALITY_CUMULATIVE
+        metrics_flush_interval: 15s
+        # drop series of pods that are gone
+        metrics_expiration: 5m
+
+      # client -> server edges. both spans of a trace are on this replica
+      # because the agent routes by trace ID
+      service_graph:
+        latency_histogram_buckets: [10ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s]
+        # wait for the other half of an edge. SDKs export every 5s, so a shorter
+        # ttl turns real edges into "unknown"
+        store:
+          ttl: 10s
+          max_items: 10000
+        # uninstrumented peers (postgres) show up as a node named by these
+        virtual_node_peer_attributes: [peer.service, server.address, db.system]
+        metrics_flush_interval: 15s
+
+      forward: {}
+
+    processors:
+      # span metrics are computed before this, so lowering the baseline doesn't
+      # change them. 100% here so every exemplar opens a trace; prod would use
+      # ~10%, and then only error/slow exemplars are sure to have one
+      tail_sampling:
+        decision_wait: 10s
+        policies:
+          - name: errors
+            type: status_code
+            status_code:
+              status_codes: [ERROR]
+          - name: slow
+            type: latency
+            latency:
+              threshold_ms: 500
+          - name: baseline
+            type: probabilistic
+            probabilistic:
+              sampling_percentage: 100
+
+    exporters:
+      otlp_grpc/tempo:
+        endpoint: tempo.observability.svc:4317
+        tls:
+          insecure: true
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resource/common]
+          exporters: [span_metrics, service_graph, forward]
+        traces/sampled:
+          receivers: [forward]
+          processors: [tail_sampling, batch]
+          exporters: [otlp_grpc/tempo]

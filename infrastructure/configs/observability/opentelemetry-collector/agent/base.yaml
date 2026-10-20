@@ -1,0 +1,126 @@
+# agent: one per node, collects and forwards. signal pipelines are in <signal>.yaml
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-agent
+  namespace: observability
+spec:
+  mode: daemonset
+  serviceAccount: otel-agent
+  # per-node: each agent only scrapes pods on its own node, no duplicates
+  targetAllocator:
+    enabled: true
+    allocationStrategy: per-node
+    serviceAccount: otel-targetallocator
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+  observability:
+    metrics:
+      enableMetrics: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      memory: 256Mi
+  env:
+    - name: K8S_NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+  # apps push OTLP to their node's agent via status.hostIP
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      hostPort: 4317
+    - name: otlp-http
+      port: 4318
+      hostPort: 4318
+  volumes:
+    - name: varlogpods
+      hostPath:
+        path: /var/log/pods
+    - name: storage
+      hostPath:
+        path: /var/lib/otelcol
+        type: DirectoryOrCreate
+  volumeMounts:
+    - name: varlogpods
+      mountPath: /var/log/pods
+      readOnly: true
+    - name: storage
+      mountPath: /var/lib/otelcol
+  # hostPath writes and pod log reads need root
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+  config:
+    extensions:
+      # filelog offsets and the export queue survive agent restarts
+      file_storage:
+        directory: /var/lib/otelcol
+        create_directory: true
+
+    receivers:
+      # traces and logs from the instrumented apps
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+
+      # done here, each agent only watches pods on its node
+      k8s_attributes:
+        auth_type: serviceAccount
+        filter:
+          node_from_env_var: K8S_NODE_NAME
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.name
+              - from: resource_attribute
+                name: k8s.namespace.name
+          - sources:
+              - from: connection
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.deployment.name
+            - k8s.node.name
+            - container.image.tag
+          labels:
+            # pod label app is the service name everywhere (Prometheus job, Sloth service)
+            - tag_name: service.name
+              key: app
+              from: pod
+
+      batch: {}
+
+    exporters:
+      # metrics and logs; traces use load_balancing (traces.yaml)
+      otlp_grpc/gateway:
+        endpoint: otel-gateway-collector.observability.svc:4317
+        tls:
+          insecure: true
+        # buffer on disk while the gateway restarts or scales
+        sending_queue:
+          storage: file_storage
+
+    service:
+      extensions: [file_storage]

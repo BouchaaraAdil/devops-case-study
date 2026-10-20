@@ -1,0 +1,75 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: backend-api-alerts
+  namespace: observability
+spec:
+  groups:
+    - name: backend-api
+      rules:
+        - alert: BackendApiHighErrorRate
+          expr: |
+            sum(rate(backend_api_requests_total{endpoint="/process", status=~"5.."}[5m]))
+              / sum(rate(backend_api_requests_total{endpoint="/process"}[5m]))
+              > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            service: backend-api
+            team: backend
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#backendapihigherrorrate"
+            summary: "Backend API /process error rate is {{ $value | humanizePercentage }}"
+
+        - alert: BackendApiHighLatency
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(backend_api_request_duration_seconds_bucket{endpoint="/process"}[5m])))
+              > 0.5
+          for: 5m
+          labels:
+            severity: warning
+            service: backend-api
+            team: backend
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#backendapihighlatency"
+            summary: "Backend API p95 latency is {{ $value | humanizeDuration }}"
+
+        # a full pool fails /ready, so pool_exhausted stops once the pods go NotReady.
+        # 10 = DB_POOL_MAX (not exported by the app)
+        - alert: BackendDbPoolExhausted
+          expr: |
+            sum by (pod) (rate(backend_api_db_queries_total{status="pool_exhausted"}[5m])) > 0
+              or max by (pod) (backend_api_db_connections_active) >= 10
+          for: 1m
+          labels:
+            severity: critical
+            service: backend-api
+            team: backend
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#backenddbpoolexhausted"
+            summary: "{{ $labels.pod }} is out of DB connections"
+
+        - alert: BackendDbConnectionsHigh
+          expr: backend_api_db_connections_active >= 8
+          for: 5m
+          labels:
+            severity: warning
+            service: backend-api
+            team: backend
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#backenddbconnectionshigh"
+            summary: "{{ $labels.pod }} holds {{ $value }}/10 DB connections, pool is leaking or saturated"
+
+        - alert: BackendDbErrors
+          expr: |
+            sum(rate(backend_api_db_queries_total{status="error"}[5m]))
+              / sum(rate(backend_api_db_queries_total[5m]))
+              > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            service: backend-api
+            team: backend
+          annotations:
+            runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#backenddberrors"
+            summary: "{{ $value | humanizePercentage }} of DB queries are failing"

@@ -1,0 +1,27 @@
+# traces: OTLP from the apps, routed to the gateway by trace ID
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-agent
+  namespace: observability
+spec:
+  config:
+    exporters:
+      # every span of a trace lands on the same gateway replica, which tail sampling needs
+      load_balancing:
+        routing_key: traceID
+        protocol:
+          otlp:
+            tls:
+              insecure: true
+        resolver:
+          dns:
+            hostname: otel-gateway-collector-headless.observability.svc.cluster.local
+            port: "4317"
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8s_attributes, batch]
+          exporters: [load_balancing]

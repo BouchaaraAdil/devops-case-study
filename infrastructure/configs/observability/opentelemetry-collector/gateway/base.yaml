@@ -1,0 +1,48 @@
+# gateway: processing rules and backend endpoints. signal pipelines are in <signal>.yaml
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-gateway
+  namespace: observability
+spec:
+  mode: deployment
+  # 1 replica fits the local Docker VM; production would run minReplicas >= 2
+  autoscaler:
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilization: 70
+    targetMemoryUtilization: 70
+  observability:
+    metrics:
+      enableMetrics: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  config:
+    receivers:
+      # everything arrives from the agents
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+
+      # added to every signal; k8s.* comes from the agent
+      resource/common:
+        attributes:
+          - key: k8s.cluster.name
+            value: devops-cs
+            action: upsert
+          - key: deployment.environment.name
+            value: local
+            action: upsert
+
+      batch: {}
