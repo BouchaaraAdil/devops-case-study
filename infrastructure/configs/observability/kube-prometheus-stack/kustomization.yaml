@@ -5,3 +5,18 @@ resources:
   - alerts/ml-api.yaml
   - alerts/backend-api.yaml
   - alertmanager/slack.yaml
+configMapGenerator:
+  - name: dashboard-ml-services
+    namespace: observability
+    files:
+      - dashboards/ml-services.json
+  - name: dashboard-service-slo
+    namespace: observability
+    files:
+      - dashboards/service-slo.json
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Services
