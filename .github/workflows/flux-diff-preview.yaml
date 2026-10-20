@@ -63,7 +63,12 @@ jobs:
         run: |
           changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           failed=0
-          echo "### Flux diff against \`${{ github.base_ref }}\`" > diff.md
+          {
+            echo "### Flux diff"
+            echo
+            echo "What this PR changes on the cluster, compared with \`${{ github.base_ref }}\`."
+            echo
+          } > diff.md
           for ks in infra-controllers:infrastructure/controllers infra-configs:infrastructure/configs apps:apps; do
             name=${ks%%:*}; path=${ks#*:}
             grep -q "^${path}/" <<< "$changed" || continue
@@ -72,16 +77,27 @@ jobs:
             ns=$(kubectl kustomize "$path" | yq 'select(.kind == "Namespace")')
             [ -z "$ns" ] || kubectl apply --server-side -f - <<< "$ns"
             rc=0
+            out=$(flux diff kustomization "$name" --path "./${path}" 2>&1) || rc=$?
+            out=$(grep -v 'identified at least one change' <<< "$out" || true)
+            # flux diff exits 1 when there are changes, >1 on errors
+            if [ "$rc" -gt 1 ]; then
+              failed=1; summary="diff failed"; open=" open"
+            else
+              summary=""; open=""
+              for change in created drifted deleted; do
+                n=$(grep -c " ${change}\$" <<< "$out" || true)
+                [ "$n" -eq 0 ] || summary="${summary:+$summary, }$n $change"
+              done
+            fi
             {
-              echo "<details open><summary><b>${name}</b></summary>"
+              echo "<details${open}><summary><b>${name}</b>: ${summary:-no changes}</summary>"
               echo
               echo '```diff'
-              flux diff kustomization "$name" --path "./${path}" 2>&1 || rc=$?
+              echo "$out"
               echo '```'
               echo "</details>"
+              echo
             } >> diff.md
-            # flux diff exits 1 when there are changes, >1 on errors
-            [ "$rc" -le 1 ] || failed=1
             # configs can use CRDs that come with this PR's controllers, so install
             # those before the configs diff, the same order Flux applies them in
             if [ "$name" = infra-controllers ]; then
