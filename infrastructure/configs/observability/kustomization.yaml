@@ -4,3 +4,4 @@ resources:
   - kube-prometheus-stack
   - opentelemetry-operator
   - opentelemetry-collector
+  - sloth

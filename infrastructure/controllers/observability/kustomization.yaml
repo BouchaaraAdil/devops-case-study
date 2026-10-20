@@ -6,3 +6,4 @@ resources:
   - loki
   - tempo
   - opentelemetry-operator
+  - sloth

@@ -1,0 +1,49 @@
+apiVersion: sloth.slok.dev/v1
+kind: PrometheusServiceLevel
+metadata:
+  name: ml-api
+  namespace: observability
+spec:
+  service: ml-api
+  slos:
+    - name: availability
+      objective: 99.5
+      description: /predict answers without a 5xx
+      sli:
+        events:
+          errorQuery: sum(rate(ml_api_requests_total{endpoint="/predict",status=~"5.."}[{{.window}}])) or vector(0)
+          totalQuery: sum(rate(ml_api_requests_total{endpoint="/predict"}[{{.window}}]))
+      alerting:
+        name: MLApiAvailabilitySLOBurn
+        labels:
+          team: ml
+        annotations:
+          runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#mlapiavailabilitysloburn"
+        pageAlert:
+          labels:
+            severity: critical
+        ticketAlert:
+          labels:
+            severity: warning
+    - name: latency
+      objective: 99
+      description: /predict answers under 500ms
+      sli:
+        events:
+          errorQuery: |
+            sum(rate(ml_api_request_duration_seconds_count{endpoint="/predict"}[{{.window}}]))
+            -
+            sum(rate(ml_api_request_duration_seconds_bucket{endpoint="/predict",le="0.5"}[{{.window}}]))
+          totalQuery: sum(rate(ml_api_request_duration_seconds_count{endpoint="/predict"}[{{.window}}]))
+      alerting:
+        name: MLApiLatencySLOBurn
+        labels:
+          team: ml
+        annotations:
+          runbook_url: "https://github.com/BouchaaraAdil/devops-case-study/blob/main/docs/runbooks.md#mlapilatencysloburn"
+        pageAlert:
+          labels:
+            severity: critical
+        ticketAlert:
+          labels:
+            severity: warning
