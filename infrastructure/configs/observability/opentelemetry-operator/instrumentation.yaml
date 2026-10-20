@@ -1,0 +1,39 @@
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: python
+  namespace: observability
+spec:
+  # node-local agent (DaemonSet hostPort), no cross-node hop
+  exporter:
+    endpoint: http://$(OTEL_NODE_IP):4318
+  env:
+    - name: OTEL_NODE_IP
+      valueFrom:
+        fieldRef:
+          fieldPath: status.hostIP
+  propagators:
+    - tracecontext
+    - baggage
+  sampler:
+    type: parentbased_traceidratio
+    argument: "1"
+  python:
+    env:
+      - name: OTEL_TRACES_EXPORTER
+        value: otlp
+      # adds http.server.request.duration with trace_id exemplars (/metrics is still scraped)
+      - name: OTEL_METRICS_EXPORTER
+        value: otlp
+      - name: OTEL_METRIC_EXPORT_INTERVAL
+        value: "15000"
+      # stable HTTP semconv: http.server.request.duration in seconds, http.response.status_code
+      - name: OTEL_SEMCONV_STABILITY_OPT_IN
+        value: http
+      # logs with trace_id/span_id, needs the uvicorn --log-config
+      - name: OTEL_LOGS_EXPORTER
+        value: otlp
+      - name: OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED
+        value: "true"
+      - name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS
+        value: health,ready,metrics

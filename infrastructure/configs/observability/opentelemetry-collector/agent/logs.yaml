@@ -11,6 +11,9 @@ spec:
         include:
           - /var/log/pods/*/*/*.log
         exclude:
+          # these push logs over OTLP with trace context
+          - /var/log/pods/ml-api_*/*/*.log
+          - /var/log/pods/backend-api_*/*/*.log
           # collector logs would feed back into the collectors
           - /var/log/pods/observability_otel-*/*/*.log
         include_file_path: true
