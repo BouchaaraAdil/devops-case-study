@@ -4,3 +4,10 @@ resources:
   - namespace.yaml
   - deployment.yaml
   - service.yaml
+# uvicorn loggers don't propagate to root by default, so OTel never saw them.
+# no root key: setting root would drop the handler OTel adds there
+configMapGenerator:
+  - name: uvicorn-log-config
+    namespace: backend-api
+    files:
+      - log-config.json=uvicorn-log-config.json
