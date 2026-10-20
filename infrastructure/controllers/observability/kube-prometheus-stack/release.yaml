@@ -1,0 +1,177 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kube-prometheus-stack
+  namespace: observability
+spec:
+  interval: 30m
+  timeout: 10m
+  chart:
+    spec:
+      chart: kube-prometheus-stack
+      version: 92.3.1
+      sourceRef:
+        kind: HelmRepository
+        name: kube-prometheus-stack
+  install:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  upgrade:
+    crds: CreateReplace
+    cleanupOnFail: true
+    remediation:
+      retries: 3
+  values:
+    # k3s bundles these into the server binary, nothing to scrape
+    kubeControllerManager:
+      enabled: false
+    kubeScheduler:
+      enabled: false
+    kubeProxy:
+      enabled: false
+    kubeEtcd:
+      enabled: false
+
+    alertmanager:
+      alertmanagerSpec:
+        # AlertmanagerConfigs in this namespace match alerts from any namespace
+        alertmanagerConfigMatcherStrategy:
+          type: OnNamespaceExceptForAlertmanagerNamespace
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+          limits:
+            memory: 128Mi
+
+    prometheus:
+      prometheusSpec:
+        # app metrics and span metrics arrive from the OTel gateway over OTLP
+        enableOTLPReceiver: true
+        otlp:
+          # turned into labels, the rest stays on target_info
+          promoteResourceAttributes:
+            - k8s.cluster.name
+            - deployment.environment.name
+        enableFeatures:
+          - exemplar-storage
+        # covers the 30d SLO window. the size cap drops the oldest blocks before the disk fills
+        retention: 30d
+        retentionSize: 18GB
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            memory: 2Gi
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 20Gi
+        ruleSelectorNilUsesHelmValues: false
+        serviceMonitorSelectorNilUsesHelmValues: false
+        podMonitorSelectorNilUsesHelmValues: false
+
+    grafana:
+      adminPassword: admin
+      # grafana 13 idles around 400Mi, 512Mi got OOMKilled
+      resources:
+        requests:
+          cpu: 50m
+          memory: 384Mi
+        limits:
+          memory: 1Gi
+      sidecar:
+        datasources:
+          # exemplars -> Tempo. the SDK and the span_metrics connector both use trace_id
+          extraJsonData:
+            exemplarTraceIdDestinations:
+              - datasourceUid: tempo
+                name: trace_id
+                urlDisplayLabel: View trace
+        dashboards:
+          folderAnnotation: grafana_folder
+          annotations:
+            grafana_folder: Platform
+          provider:
+            foldersFromFilesStructure: true
+      # community Kubernetes views, pulled from grafana.com at pinned revisions
+      dashboardProviders:
+        dashboardproviders.yaml:
+          apiVersion: 1
+          providers:
+            - name: kubernetes
+              folder: Kubernetes
+              type: file
+              disableDeletion: true
+              options:
+                path: /var/lib/grafana/dashboards/kubernetes
+      dashboards:
+        kubernetes:
+          k8s-views-global:
+            gnetId: 15757
+            revision: 43
+            datasource: Prometheus
+          k8s-views-namespaces:
+            gnetId: 15758
+            revision: 46
+            datasource: Prometheus
+          k8s-views-nodes:
+            gnetId: 15759
+            revision: 40
+            datasource: Prometheus
+          k8s-views-pods:
+            gnetId: 15760
+            revision: 41
+            datasource: Prometheus
+      additionalDataSources:
+        - name: Loki
+          type: loki
+          uid: loki
+          url: http://loki.observability.svc:3100
+          jsonData:
+            # log line -> trace, from the trace_id structured metadata
+            derivedFields:
+              - name: TraceID
+                matcherType: label
+                matcherRegex: trace_id
+                datasourceUid: tempo
+                url: $${__value.raw}
+                urlDisplayLabel: View trace
+        - name: Tempo
+          type: tempo
+          uid: tempo
+          url: http://tempo.observability.svc:3200
+          jsonData:
+            serviceMap:
+              datasourceUid: prometheus
+            nodeGraph:
+              enabled: true
+            tracesToMetrics:
+              datasourceUid: prometheus
+              spanStartTimeShift: -5m
+              spanEndTimeShift: 5m
+              tags:
+                - key: service.name
+                  value: service_name
+              # span metrics come from the gateway span_metrics connector
+              queries:
+                - name: Request rate
+                  query: sum by (span_name) (rate(traces_span_metrics_calls_total{$$__tags}[5m]))
+                - name: Error rate
+                  query: sum by (span_name) (rate(traces_span_metrics_calls_total{$$__tags, status_code="STATUS_CODE_ERROR"}[5m]))
+                - name: p95 latency
+                  query: histogram_quantile(0.95, sum by (le, span_name) (rate(traces_span_metrics_duration_seconds_bucket{$$__tags}[5m])))
+            tracesToLogsV2:
+              datasourceUid: loki
+              spanStartTimeShift: -5m
+              spanEndTimeShift: 5m
+              # OTLP logs carry trace_id, so a span opens exactly its own log lines
+              filterByTraceID: true
+              tags:
+                - key: service.name
+                  value: service_name
