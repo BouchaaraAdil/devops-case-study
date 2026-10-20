@@ -1,0 +1,36 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: tempo
+  namespace: observability
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: tempo
+      version: 3.1.0
+      sourceRef:
+        kind: HelmRepository
+        name: tempo
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    cleanupOnFail: true
+    remediation:
+      retries: 3
+  values:
+    tempo:
+      reportingEnabled: false
+      retention: 72h
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          memory: 1Gi
+      # stores traces only. span metrics and the service graph come from the
+      # OTel gateway, which sees every span before tail sampling
+    persistence:
+      enabled: true
+      size: 10Gi
